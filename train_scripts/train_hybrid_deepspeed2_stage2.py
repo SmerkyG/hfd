@@ -1389,17 +1389,17 @@ if __name__ == '__main__':
             print(f'initializing teacher model with id {teacher_model_id}')
             time.sleep(5)
 
-            # Int8量子化設定
-            quantization_config = BitsAndBytesConfig(
-                load_in_8bit=True,  # 4bitではなく8bitに変更
-                int8_threshold=6.0,  # Int8量子化の閾値（デフォルト: 6.0）
-                llm_int8_has_fp16_weight=False,  # FP16の重みを保持しない
-                llm_int8_enable_fp32_cpu_offload=False  # CPU offloadを無効化
-            )
+            # # Int8量子化設定
+            # quantization_config = BitsAndBytesConfig(
+            #     load_in_8bit=True,  # 4bitではなく8bitに変更
+            #     int8_threshold=6.0,  # Int8量子化の閾値（デフォルト: 6.0）
+            #     llm_int8_has_fp16_weight=False,  # FP16の重みを保持しない
+            #     llm_int8_enable_fp32_cpu_offload=False  # CPU offloadを無効化
+            # )
 
             teacher_model = AutoModelForCausalLM.from_pretrained(
                 teacher_model_id,
-                quantization_config=quantization_config,  # 量子化設定を有効化
+                # quantization_config=quantization_config,  # 量子化設定を有効化
                 torch_dtype=torch.bfloat16,  # Int8でも計算時の型指定は必要
                 device_map=DeviceID,
                 trust_remote_code=True
