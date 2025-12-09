@@ -364,8 +364,8 @@ class TeacherAttnManager:
         self.model_engine = model_engine
         self.layers = layers
         self.stored_teacher_attns = {}
-        self.stored_vfirst_state = {}
-        self.stored_kfirst_state = {}
+        # self.stored_vfirst_state = {}
+        # self.stored_kfirst_state = {}
         
     @contextlib.contextmanager
     def temporarily_remove_teacher_attn(self):
@@ -382,12 +382,12 @@ class TeacherAttnManager:
                     if hasattr(attention_wrapper, '_modules') and 'teacher_attn' in attention_wrapper._modules:
                         del attention_wrapper._modules['teacher_attn']
                     attention_wrapper.teacher_attn = None
-                if hasattr(attention_wrapper, 'v_first_state'):
-                    self.stored_vfirst_state[layer_idx] = attention_wrapper.v_first_state
-                    attention_wrapper.v_first_state = None
-                if hasattr(attention_wrapper, 'k_first_state'):
-                    self.stored_kfirst_state[layer_idx] = attention_wrapper.k_first_state
-                    attention_wrapper.k_first_state = None
+                # if hasattr(attention_wrapper, 'v_first_state'):
+                #     self.stored_vfirst_state[layer_idx] = attention_wrapper.v_first_state
+                #     attention_wrapper.v_first_state = None
+                # if hasattr(attention_wrapper, 'k_first_state'):
+                #     self.stored_kfirst_state[layer_idx] = attention_wrapper.k_first_state
+                #     attention_wrapper.k_first_state = None
             
             yield  # 允许在此上下文中执行代码
             
@@ -399,12 +399,12 @@ class TeacherAttnManager:
                 # 重新注册为子模块
                 if hasattr(attention_wrapper, 'add_module') and not hasattr(attention_wrapper, 'teacher_attn'):
                     attention_wrapper.add_module("teacher_attn", stored_attn)
-                v_first_state = self.stored_vfirst_state.get(layer_idx, None)
-                k_first_state = self.stored_kfirst_state.get(layer_idx, None)
-                if v_first_state is not None:
-                    attention_wrapper.v_first_state = v_first_state
-                if k_first_state is not None:
-                    attention_wrapper.k_first_state = k_first_state
+                # v_first_state = self.stored_vfirst_state.get(layer_idx, None)
+                # k_first_state = self.stored_kfirst_state.get(layer_idx, None)
+                # if v_first_state is not None:
+                #     attention_wrapper.v_first_state = v_first_state
+                # if k_first_state is not None:
+                #     attention_wrapper.k_first_state = k_first_state
             # 清空存储的引用
             self.stored_teacher_attns.clear()
 
@@ -412,8 +412,8 @@ class TeacherAttnManager_:
     def __init__(self, model_engine, layers: List[int]):
         self.model_engine = model_engine
         self.layers = layers
-        self.stored_teacher_attns = {}
-        self.stored_vfirst_state = {}
+        # self.stored_teacher_attns = {}
+        # self.stored_vfirst_state = {}
         
     @contextlib.contextmanager
     def temporarily_remove_teacher_attn(self):
@@ -430,9 +430,9 @@ class TeacherAttnManager_:
                     if hasattr(attention_wrapper, '_modules') and 'teacher_attn' in attention_wrapper._modules:
                         del attention_wrapper._modules['teacher_attn']
                     attention_wrapper.teacher_attn = None
-                if hasattr(attention_wrapper, 'v_first_state'):
-                    self.stored_vfirst_state[layer_idx] = attention_wrapper.v_first_state
-                    attention_wrapper.v_first_state = None
+                # if hasattr(attention_wrapper, 'v_first_state'):
+                #     self.stored_vfirst_state[layer_idx] = attention_wrapper.v_first_state
+                #     attention_wrapper.v_first_state = None
             
             yield  # 允许在此上下文中执行代码
             
@@ -444,9 +444,9 @@ class TeacherAttnManager_:
                 # 重新注册为子模块
                 if hasattr(attention_wrapper, 'add_module') and not hasattr(attention_wrapper, 'teacher_attn'):
                     attention_wrapper.add_module("teacher_attn", stored_attn)
-                v_first_state = self.stored_vfirst_state.get(layer_idx, None)
-                if v_first_state is not None:
-                    attention_wrapper.v_first_state = v_first_state
+                # v_first_state = self.stored_vfirst_state.get(layer_idx, None)
+                # if v_first_state is not None:
+                #     attention_wrapper.v_first_state = v_first_state
             # 清空存储的引用
             self.stored_teacher_attns.clear()
 import ctypes
@@ -1360,20 +1360,20 @@ if __name__ == '__main__':
         #     kfirst_holder.requires_grad_(False)
         # else:
          
-        vfirst_holder = VFirstHolder(args.micro_bsz, args.max_seq_length,args.num_key_value_heads,args.head_size_a,device=DeviceID)
-        vfirst_holder.requires_grad_(False)
+        # vfirst_holder = VFirstHolder(args.micro_bsz, args.max_seq_length,args.num_key_value_heads,args.head_size_a,device=DeviceID)
+        # vfirst_holder.requires_grad_(False)
 
-        kfirst_holder = KFirstHolder(args.micro_bsz, args.max_seq_length,args.num_key_value_heads,args.head_size_a,device=DeviceID)
-        kfirst_holder.requires_grad_(False)
+        # kfirst_holder = KFirstHolder(args.micro_bsz, args.max_seq_length,args.num_key_value_heads,args.head_size_a,device=DeviceID)
+        # kfirst_holder.requires_grad_(False)
         
 
 
         #Zero 2 will hold the model in one GPU process
-        print(f'Zero 2 will hold the model in one GPU process,set the vfirst_holder to model_engine')
-        for layer_idx in args.layers:
-            attn_wrapper = model_engine.module.model.model.layers[layer_idx].self_attn
-            attn_wrapper.v_first_state = vfirst_holder
-            attn_wrapper.k_first_state = kfirst_holder
+        # print(f'Zero 2 will hold the model in one GPU process,set the vfirst_holder to model_engine')
+        # for layer_idx in args.layers:
+        #     attn_wrapper = model_engine.module.model.model.layers[layer_idx].self_attn
+        #     attn_wrapper.v_first_state = vfirst_holder
+        #     attn_wrapper.k_first_state = kfirst_holder
         timer.initialize_with_engine(model_engine)
         #print current gpu memory
         if args.local_rank == 0:

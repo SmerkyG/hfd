@@ -34,34 +34,6 @@ def embedding_hook(module,input,output):
         #print(f'embedding detected = {output.shape}')
         current_embeddings = output
 
-class VFirstHolder(nn.Module):
-    
-    def __init__(self, batch_size: int, seq_length: int, num_kv :int, head_size:int,dtype=torch.bfloat16,device='cpu'):
-        super().__init__()
-        self.shared_state = nn.Parameter(
-            torch.zeros(
-                (batch_size, seq_length, num_kv, head_size),
-                dtype=dtype,
-                device=device
-            ),
-            requires_grad=False
-        )
-
-class KFirstHolder(nn.Module):
-    
-    def __init__(self, batch_size: int, seq_length: int, num_kv :int, head_size:int,dtype=torch.bfloat16,device='cpu'):
-        super().__init__()
-        self.shared_state = nn.Parameter(
-            torch.zeros(
-                (batch_size, seq_length, num_kv, head_size),
-                dtype=dtype,
-                device=device
-            ),
-            requires_grad=False
-        )
-    
-
-
 class AttentionWrapper(nn.Module):
     
     def __init__(self,student_attn,layer_idx,args):
