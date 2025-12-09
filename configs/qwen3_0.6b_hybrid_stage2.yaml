@@ -1,0 +1,29 @@
+RWKV:
+  layers: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27]
+  grad_cp: 1
+  transformer_layers:  [16, 19, 21, 24, 25]
+  #transformer_layers: [5,11,17,23,29,35,41,47]
+architecture: hxa07c
+disable_qk_norm: False
+freeze_attention: 0
+hybrid_attention_layers: 0
+freeze_hybrid_attention: 0
+allow_quant_frozen_layers: 1
+quant_mode: none
+peftmode: full
+peft_r: 32
+peft_scaling: 0.5
+peft_dropout: 0.01
+mlp_quant_mode: int8
+bnb_optimizer_mode: 0
+
+Llama:
+  model_id: /home/rwkv/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B-Base/snapshots/da87bfb608c14b7cf20ba1ce41287e8de496c0cd/
+is_llama_ffn: True
+kl_weight: 1
+ce_weight: 0
+model_file: Qwen3-0.6B
+is_rwkv_att_only: True
+teach_mode:
+  is_client: False
+is_all_labels_kl: True
