@@ -72,7 +72,7 @@ WORLD_SIZE=$((NNODES * GPUS_PER_NODE))
 deepspeed \
     --num_nodes $NNODES \
     --num_gpus $GPUS_PER_NODE \
-    train_scripts/train_hybrid_deepspeed2_stage2.py \
+    train_hybrid_deepspeed2_stage2.py \
     --deepspeed \
     $DEEPSPEED_OFFLOAD \
     $FULL_PARAMS \

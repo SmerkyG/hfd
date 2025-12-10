@@ -21,7 +21,7 @@ from tqdm import tqdm
 from train_scripts.profiler import timer
 
 if __name__ == '__main__':
-    from train_functions import configure_optimizer, train_step
+    from train_scripts.train_functions import configure_optimizer, train_step
 
     parser = create_arg_parser()
     args = parser.parse_args()
@@ -136,7 +136,7 @@ if __name__ == '__main__':
     os.environ['RWKV_ATTN_PEFT_SCALING'] = str(args.peft_scaling)
     os.environ['RWKV_ATTN_PEFT_DROPOUT'] = str(args.peft_dropout)
 
-    from hybrid_model import HybridModel
+    from model.hybrid_model import HybridModel
 
     model = HybridModel(transformer_model, args, tokenizer)
 
@@ -741,7 +741,13 @@ if __name__ == '__main__':
     # gc.collect()
     # torch.cuda.empty_cache()
 
+    pbar = None
+    trained_tokens = 0
+
     for epoch in range(args.max_epochs):
+        if terminate:
+            break
+
         model_engine.train()
         if model_engine.global_rank == 0:
             pbar = tqdm(total=args.epoch_steps, desc=f"Epoch {epoch}")
@@ -773,9 +779,9 @@ if __name__ == '__main__':
             model_engine.step()
             
             # 每一步都调用 on_train_batch_end，但只在累积步骤结束时更新进度条
-            last_log_time, pbar = on_train_batch_end(
+            last_log_time, pbar, trained_tokens = on_train_batch_end(
                 args, batch_idx, model_engine,teacher_engine, loss.item(), teacher_loss, kl_loss, student_cross_entropy_loss,
-                global_step, epoch, last_log_time, token_per_step, is_accumulation_step, pbar,grad_norm=grad_norm
+                global_step, epoch, last_log_time, token_per_step, is_accumulation_step, pbar, trained_tokens, grad_norm=grad_norm
             )
 
             if trained_tokens >= args.max_trained_tokens:

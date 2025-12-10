@@ -11,8 +11,8 @@ RWKV_VERSION=os.environ.get('RWKV_VERSION','v7')
 is_rwkv_7 = RWKV_VERSION == 'v7'
 #if is_rwkv_7 :
 if os.environ["architecture"] == 'hxa07c':
-    from TimeMixer import RWKV_Tmix_x070_Mose_cxa07C as TimeMixer
-from TimeMixer import GQAWithRopeAttention as SelfAttention
+    from .TimeMixer import RWKV_Tmix_x070_Mose_cxa07C as TimeMixer
+from .TimeMixer import GQAWithRopeAttention as SelfAttention
 
 import torch
 from torch.nn import functional as F

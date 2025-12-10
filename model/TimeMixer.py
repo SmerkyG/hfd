@@ -2,29 +2,30 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import math
-from torch.utils.cpp_extension import load
+#from torch.utils.cpp_extension import load
 #HEAD_SIZE = 64
 import sys
 import os
+import torch._dynamo
 torch._dynamo.config.cache_size_limit = 256
-parent_dir = os.path.dirname(os.path.abspath(__file__))
-print(f'parent_dir: {parent_dir}')
+# parent_dir = os.path.dirname(os.path.abspath(__file__))
+# print(f'parent_dir: {parent_dir}')
 is_wind_cuda = False
 
 #from tritonbighead import RUN_CUDA_RWKV7g
 if os.environ["architecture"] == 'hxa079':
-    from backstepping_longhead import RUN_CUDA_RWKV7g
+    from .backstepping_longhead import RUN_CUDA_RWKV7g
     print('hxa079 Mode')
 elif os.environ["architecture"] == 'hxa07a':
-    from backstepping_longhead import RUN_CUDA_RWKV7g
+    from .backstepping_longhead import RUN_CUDA_RWKV7g
     print('hxa07A Mode')
 
 elif os.environ["architecture"] == 'hxa07b':
-    from backstepping_longhead import RUN_CUDA_RWKV7g
+    from .backstepping_longhead import RUN_CUDA_RWKV7g
     print('hxa07B Mode')
 
 elif os.environ["architecture"] == 'hxa07c':
-    from backstepping_longhead import RUN_CUDA_RWKV7g
+    from .backstepping_longhead import RUN_CUDA_RWKV7g
     print('hxa07B Mode')
 
 def repeat_kv_original(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:

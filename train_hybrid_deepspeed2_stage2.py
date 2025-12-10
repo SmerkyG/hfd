@@ -12,7 +12,6 @@ import yaml
 import deepspeed
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-import datasets
 import json
 import math
 import time
@@ -21,7 +20,7 @@ from tqdm import tqdm
 from train_scripts.profiler import timer
 
 if __name__ == '__main__':
-    from train_functions import configure_optimizer, train_step
+    from train_scripts.train_functions import configure_optimizer_stage2, train_step
 
     parser = create_arg_parser()
     args = parser.parse_args()
@@ -39,19 +38,20 @@ if __name__ == '__main__':
     with open(args.config_file) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
     print(config)
-    
+
     # 设置设备和数据类型
     dtype = torch.bfloat16
     #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     DeviceID = f'cuda:{args.local_rank}'
     args.DeviceID = DeviceID
-    
+
    
     # 加载模型和分词器
     transformer_model = AutoModelForCausalLM.from_pretrained(config['Llama']['model_id'],
-                                                            torch_dtype=dtype, device_map=DeviceID,trust_remote_code=True)
+                                                             torch_dtype=dtype, device_map='cpu',low_cpu_mem_usage=True,trust_remote_code=True)
     
+
     args.freeze_attention = config['freeze_attention']
     args.hybrid_attention_layers = config['hybrid_attention_layers']
     args.freeze_hybrid_attention = config['freeze_hybrid_attention']
@@ -74,7 +74,7 @@ if __name__ == '__main__':
         tokenizer.pad_token = tokenizer.eos_token
 
     # 设置参数
-    args.my_pos_emb = 0 
+    args.my_pos_emb = 0
     args.head_size_divisor = 8
     args.ctx_len = 4096
     args.n_layer = transformer_model.config.num_hidden_layers
@@ -112,7 +112,7 @@ if __name__ == '__main__':
         args.deepspeed_offload = False
 
     args.deepspeed_offload = False
-    
+
     # 初始化混合模型
     teacher_attn_module_list = torch.nn.ModuleList()
     for layer_idx in range(transformer_model.config.num_hidden_layers):
@@ -129,14 +129,14 @@ if __name__ == '__main__':
 #     parser.add_argument('--peft_r', type=int, default=32, help='peft block lora rank')
 #     parser.add_argument('--peft_scaling', type=float, default=0.5, help='peft block lora scaling')
 #     parser.add_argument('--peft_dropout', type=float, default=0.01, help='peft block lora dropout')
-    
+
     os.environ['RWKV_ATTN_PEFTMODE'] = str(args.peftmode)
     os.environ['RWKV_ATTN_QUANT'] = str(args.quant_mode)
     os.environ['RWKV_ATTN_PEFT_R'] = str(args.peft_r)
     os.environ['RWKV_ATTN_PEFT_SCALING'] = str(args.peft_scaling)
     os.environ['RWKV_ATTN_PEFT_DROPOUT'] = str(args.peft_dropout)
 
-    from hybrid_model import HybridModel
+    from model.hybrid_model import HybridModel
 
     model = HybridModel(transformer_model, args, tokenizer)
 
@@ -426,19 +426,85 @@ if __name__ == '__main__':
                                 print('shape is not same')
                         else:
                             print('not found')
+    
+    if args.local_rank == 0:
+        print(model)
+        # 打印几个关键参数的统计信息
+        #print parameter:model.model.layers.27.self_attn.student_attn.ln_x.weight
+        for name, param in model.named_parameters():
+            if name == pname:
+                mean_of_param = param.mean().item()
+                std_of_param = param.std().item()
+                print(f"Parameter {name}: mean={mean_of_param:.6f}, std={std_of_param:.6f}")
+    # 设置模型参数的训练状态
+    print('all params are trainable')
+    print(f'freeze mlp is {args.freeze_mlp}')
+
+    # チェックポイントをロード
+    checkpoint = torch.load(args.ckpt_file, map_location='cpu', mmap=True)
+
+    # モデル形式に応じてstate_dictを取得
+    if "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    elif "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    else:
+        state_dict = checkpoint
+
+    # 指定したモジュールを含まないパラメータのみをフィルタリング
+    filtered_state_dict = {}
+
+    # モデルの参照パラメータ
+    model_state_dict = model.state_dict()
+
+    filtered_state_dict = {}
+    for key, value in state_dict.items():
+        if any(excluded in key for excluded in ["embed", "lm_head", ".norm.", "mlp.weight", "qweight", "scales"]):
+            print(f'{key} skipped [excluded]')
+            continue
+
+        if key not in model_state_dict:
+            print(f'{key} skipped [missing in model]')
+            continue
+
+        if model_state_dict[key].shape != value.shape:
+            print(f'{key} skipped [shape mismatch: ckpt{tuple(value.shape)} vs model{tuple(model_state_dict[key].shape)}]')
+            continue
+
+        # dtype 変換（浮動小数テンソルの場合のみ）
+        if torch.is_floating_point(value):
+            value = value.to(dtype=torch.bfloat16, copy=False)
+
+        filtered_state_dict[key] = value
+        print(f'{key} loaded (bfloat16)')
+
+    # strict=False で欠けているキーがあってもロード続行
+    missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
+
+    # オプション: ロード後の不一致を報告
+    if missing:
+        print(f'Missing keys in checkpoint: {missing}')
+    if unexpected:
+        print(f'Unexpected keys in checkpoint: {unexpected}')
+
+    
 
 
-    if args.ckpt_file is not None:
-        model.load_check_point(args.ckpt_file)  
+    # 除外したパラメータ数と残ったパラメータ数を出力
+    print(f"除外したパラメータ: {len(state_dict) - len(filtered_state_dict)}")
+    print(f"ロードしたパラメータ: {len(filtered_state_dict)}")
+
+    del checkpoint
+    del filtered_state_dict
+    del state_dict
+    gc.collect()
+
+    if args.grad_cp == 1:
+        print('enable gradient checkpointing')
+        model.model.gradient_checkpointing_enable()
 
 
-
-
-
-
-    print(f'Stage1 Only self_attn params are trainable')
-  
-
+    
     for name, param in model.named_parameters():
         Attention = 0
         for i in range(args.n_layer):
@@ -449,18 +515,23 @@ if __name__ == '__main__':
             elif t in name:
                 Attention = 0
                 break
-        if Attention == 0 and args.freeze_attention and ('self_attn.student_attn' in name and ('receptance' in name or 'key' in name or 'value' in name)):
+        if Attention == 0 and args.freeze_attention and ('receptance' in name or 'key' in name or 'value' in name):
             param.requires_grad = False
             print(f'{name} Frozen')
-        elif Attention == 1 and args.freeze_hybrid_attention and ('self_attn.student_attn' in name and ('q_proj' in name or 'k_proj' in name or 'v_proj' in name or 'o_proj' in name or 'q_norm' in name or 'k_norm' in name)):
+        elif Attention==1 and args.freeze_hybrid_attention and ('self_attn.student_attn' in name and ('q_proj' in name or 'k_proj' in name or 'v_proj' in name or 'o_proj' in name or 'q_norm' in name or 'k_norm' in name)):
             param.requires_grad = False
             print(f'{name} Frozen')
-        elif 'self_attn.student_attn' in name:
-            print(f'{name} will train!')
-            param.requires_grad = True
+        elif args.freeze_mlp and 'mlp' in name and 'lora' not in name:
+            param.requires_grad = False
+            print(f'{name} Frozen')
         else:
+            param.requires_grad = True
+            print(f'{name} will Train')
+            
+    for name, param in model.named_parameters():
+        if 'lm_head' in name or '.norm.' in name:
             param.requires_grad = False
-            print(f'{name} Frozen')
+            print(f'frozen {name}')
 
     lora_base_modules = set()
     if args.peftmode != 'full':
@@ -563,74 +634,93 @@ if __name__ == '__main__':
                 "bf16": {
                     "enabled": True
                 },
-              
-                
-                "fp32_reduce_scatter": True,
+                #  "fp32_reduce_scatter": True,
                 "zero_optimization": {
                     "stage": args.deepspeed_stage,
-            
+
                     "offload_optimizer": {
                         "device": "cpu",
                         "pin_memory": False,
                         "buffer_count": 4,
                         'ratio':1.0
                     },
-                    
-                    "allgather_partitions": True,
-                    "sub_group_size": 1e7,
+
+                #    "allgather_partitions": True,
+                    #"sub_group_size": 1e7,
                     "overlap_comm": True,
+                    "contiguous_gradients": False
                 },
                 "gradient_clipping": args.gradient_clip_val,
                 "gradient_checkpointing": args.grad_cp == 1,
-                "zero_force_ds_cpu_initialization": True,
                 "zero_allow_untested_optimizer": True,
                 "gradient_accumulation_steps": args.accumulate_grad_batches if args.accumulate_grad_batches > 1 else None,
-                "wall_clock_breakdown": False,
-                "dump_state": True,
+                # "wall_clock_breakdown": False,
+                # "dump_state": True
             }
         if not args.deepspeed_offload:
             ds_config['zero_optimization']['offload_optimizer'] = None
             ds_config['zero_optimization']['offload_param'] = None
             ds_config['zero_force_ds_cpu_optimizer'] = False
             ds_config['zero_force_ds_cpu_initialization'] = False
-            
         # 手动配置优化器
         print(f'configuring optimizer with args {args}')
-        optimizer = configure_optimizer(model, args)
+
+
+        for name, m in model.named_parameters():
+            print(f'{name} requires_grad = {m.requires_grad}')
+
+        
+
+
+        # if args.quant_mode != 'none':
+        #     model = remove_original_weights_for_lora_bone(model)
+
+
+
+        print("model to CUDA Device")
+        model=model.to(device=DeviceID)
+        print("done")
+
+        print("optimizer settings")
+        optimizer = configure_optimizer_stage2(model, args)
+        print("done")
         if args.local_rank == 0:
             print(f'optimizer is {optimizer}')
             num_total_params = sum(p.numel() for p in model.parameters())
             num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            for n, p in model.named_parameters():
-                if p.requires_grad:
-                    print(f'param {n} is trainable {p.dtype}')
-                else:
-                    print(f'param {n} is frozen {p.dtype}')
+            # for n, p in model.named_parameters():
+            #     if p.requires_grad:
+            #         print(f'param {n} is trainable')
             print(f'num_total_params: {num_total_params}, num_trainable_params: {num_trainable_params}, percent: {num_trainable_params / num_total_params * 100:.2f}%')
             #print current gpu memory
             print(f'current gpu memory BEFORE initializing deepspeed: {torch.cuda.memory_summary(device=None, abbreviated=False)}')
             # model.model = torch.compile(model.model,fullgraph=True)
             # 初始化 DeepSpeed
             print(f'initializing deepspeed with config {ds_config}')
-        # exclude_int8_params_from_zero(model)
-        trainable_params = (p for p in model.parameters() if p.requires_grad)
+        
         model_engine, optimizer, _, _ = deepspeed.initialize(
             model=model,  
-            model_parameters=trainable_params,
             optimizer=optimizer,
             config=ds_config
         )
-
         del model
-
-        
-
-        for name, m in model_engine.module.model.named_parameters():
-            print(f'{name} requires_grad = {m.requires_grad}')
+        del transformer_model
+        del optimizer
+        del teacher_attn_module_list
         gc.collect()
         torch.cuda.empty_cache()
-
-
+        
+        # 添加验证代码
+        for name, param in model_engine.module.named_parameters():
+            if name == pname:
+                with deepspeed.zero.GatheredParameters(param):
+                    if args.local_rank == 0:  # 只在 rank 0 打印
+                        print(f"Parameter {name}:")
+                        print(f"  - mean: {param.mean().item():.6f} versus {mean_of_param:.6f}")
+                        print(f"  - std: {param.std().item():.6f} versus {std_of_param:.6f}")
+                    break
+            
+            
         # if args.architecture == 'hxa07b':
         #     vfirst_holder = VFirstHolder(args.micro_bsz, args.max_seq_length,int(args.num_key_value_heads*2),args.head_size_a//2,device=DeviceID)
         #     vfirst_holder.requires_grad_(False)
@@ -648,71 +738,64 @@ if __name__ == '__main__':
         # print(f'Zero 2 will hold the model in one GPU process,set the vfirst_holder to model_engine')
         # for layer_idx in args.layers:
         #     attn_wrapper = model_engine.module.model.model.layers[layer_idx].self_attn
-            # attn_wrapper.v_first_state = vfirst_holder
-            # attn_wrapper.k_first_state = kfirst_holder
+        #     attn_wrapper.v_first_state = vfirst_holder
+        #     attn_wrapper.k_first_state = kfirst_holder
         timer.initialize_with_engine(model_engine)
         #print current gpu memory
         if args.local_rank == 0:
             print(f'current gpu memory AFTER initializing deepspeed: {torch.cuda.memory_summary(device=None, abbreviated=False)}')
-        if args.stage == 1:
-            #in stage 1, we don't need teacher model and 
-            #we only align the original self attn output with TimeMixer output
-            #Init the teacher module list engine with deepspeed
-            teacher_engine = None
+        if args.stage == 2 and args.is_sft == False:
             if args.local_rank == 0:
                 print(f'initializing teacher model')
-                print(f'current gpu memory BEFORE initializing teacher attn list: {torch.cuda.memory_summary(device=None, abbreviated=False)}')
-            # ds_config = {
-            #     "zero_force_ds_cpu_optimizer": False,
-            #     "distributed_backend": "rccl",
-            #     "train_batch_size": args.train_batch_size,
-            #     "bf16": {
-            #         "enabled": True
-            #     },
-         
-            #     "zero_optimization": {
-            #         "stage": args.deepspeed_stage,
-            #         # "stage3_max_live_parameters": 1e9,
-                  
-            #         "allgather_partitions": True,
-            #         "reduce_scatter": True,
-            #         "reduce_bucket_size": 5e6,
-            #         "overlap_comm": False,
-            #         "contiguous_gradients": False
-            #     },
-            #     "zero_force_ds_cpu_initialization": True,
-            #     "dump_state": True
-            # }
-            teacher_attn_module_list.requires_grad_(False)
+                print(f'current gpu memory BEFORE initializing teacher model: {torch.cuda.memory_summary(device=None, abbreviated=False)}')
+     
+            teacher_model_id = args.teacher_model_id
+            if teacher_model_id is None:
+                teacher_model_id = config['Llama']['model_id']
+            print(f'initializing teacher model with id {teacher_model_id}')
+            time.sleep(5)
 
-            teacher_engine = teacher_attn_module_list
-            
-            #teacher_trainable_params = (p for p in teacher_attn_module_list.parameters() if p.requires_grad)
-            # exclude_int8_params_from_zero(teacher_attn_module_list)
-            # ダミーオプティマイザーを作成（学習率0で実質的に更新しない）
-            # from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
-            # dummy_optimizer = DeepSpeedCPUAdam(teacher_attn_module_list.parameters(), lr=0.0)
-            # teacher_engine, _, _, _ = deepspeed.initialize(
-            #     model=teacher_attn_module_list,
-            #     config=ds_config,
-            #     optimizer=dummy_optimizer,
-            #     #model_parameters=teacher_trainable_params,
+            # # Int8量子化設定
+            # from transformers import BitsAndBytesConfig
+            # quantization_config = BitsAndBytesConfig(
+            #     load_in_8bit=True,  # 4bitではなく8bitに変更
+            #     int8_threshold=6.0,  # Int8量子化の閾値（デフォルト: 6.0）
+            #     llm_int8_has_fp16_weight=False,  # FP16の重みを保持しない
+            #     llm_int8_enable_fp32_cpu_offload=False  # CPU offloadを無効化
             # )
-            # 遍历所有层
-            for layer_idx in args.layers:
-                if args.local_rank == 0:
-                    print(f'set teacher attn for layer {layer_idx}')
-                attention_wrapper = model_engine.module.model.model.layers[layer_idx].self_attn
-                teacher_attn = teacher_engine[layer_idx]
-                attention_wrapper.teacher_attn = teacher_attn
-                attention_wrapper.add_module("teacher_attn", teacher_attn)
-                
-            
-            # 清理不再需要的引用
-            #del teacher_attn_module_list
-            torch.cuda.empty_cache()
+
+            teacher_model = AutoModelForCausalLM.from_pretrained(
+                teacher_model_id,
+                # quantization_config=quantization_config,  # 量子化設定を有効化
+                torch_dtype=torch.bfloat16,  # Int8でも計算時の型指定は必要
+                device_map=DeviceID,
+                trust_remote_code=True
+             #   low_cpu_mem_usage=True,
+              #  attn_implementation="sdpa"
+            )
+
+            teacher_model.eval()
+
+            #teacher_model = torch.compile(teacher_model)
             if args.local_rank == 0:
-                print(f'current gpu memory AFTER initializing teacher attn list: {torch.cuda.memory_summary(device=None, abbreviated=False)}')
+                print('freeze teacher_model')
+                print(f'teacher_model is {teacher_model}')
+            for name, param in teacher_model.named_parameters():
+                param.requires_grad = False
+
+            teacher_engine = teacher_model
+      
+            if args.local_rank == 0:
+                print(f'current gpu memory AFTER initializing teacher model: {torch.cuda.memory_summary(device=None, abbreviated=False)}')
+                # 将处理好的teacher model设置到model_engine中
+                # model_engine.module.set_teacher_model(teacher_engine.module)
+                print(f'current gpu memory AFTER setting teacher model: {torch.cuda.memory_summary(device=None, abbreviated=False)}')
+            # 清理不需要的引用
+            #del teacher_model
+            #teacher_engine=teacher_model
+            gc.collect()
+            torch.cuda.empty_cache()
+
         else:
             #Other stage we don't need teacher model
             #SFT or DPO
@@ -738,15 +821,25 @@ if __name__ == '__main__':
     terminate = False
     teacher_attn_manager = TeacherAttnManager(model_engine, args.layers)
 
-    # gc.collect()
-    # torch.cuda.empty_cache()
+    
+
+    # for i in range(30):
+    #     time.sleep(1)
+    #     gc.collect()
+    #     torch.cuda.empty_cache()
+    #     print(f'waiting {i}')
+
+    pbar = None
+    trained_tokens = 0
 
     for epoch in range(args.max_epochs):
+        if terminate:
+            break
+
         model_engine.train()
         if model_engine.global_rank == 0:
             pbar = tqdm(total=args.epoch_steps, desc=f"Epoch {epoch}")
-        # gc.collect()
-        # torch.cuda.empty_cache()
+
         for batch_idx, batch in enumerate(train_dataloader):
             
             lr, wd_now = on_train_batch_start(args, model_engine, global_step, epoch)
@@ -754,7 +847,7 @@ if __name__ == '__main__':
             batch = {k: v.to(model_engine.device) for k, v in batch.items()}
             
             # 前向传播
-            loss, teacher_loss, kl_loss, student_cross_entropy_loss = train_step(model_engine, batch, args, teacher_engine, tokenizer,global_step=global_step,log_path=args.output_dir+'/stage1log.csv')
+            loss, teacher_loss, kl_loss, student_cross_entropy_loss = train_step(model_engine, batch, args, teacher_engine, tokenizer)
             
             #CAUTION: The v_first will NEVER be synchronized for first batch. Just treat it as an outlier.
 
@@ -771,11 +864,11 @@ if __name__ == '__main__':
                     grad_norm = None
                
             model_engine.step()
-            
+
             # 每一步都调用 on_train_batch_end，但只在累积步骤结束时更新进度条
             last_log_time, pbar = on_train_batch_end(
                 args, batch_idx, model_engine,teacher_engine, loss.item(), teacher_loss, kl_loss, student_cross_entropy_loss,
-                global_step, epoch, last_log_time, token_per_step, is_accumulation_step, pbar,grad_norm=grad_norm
+                global_step, epoch, last_log_time, token_per_step, is_accumulation_step, pbar, trained_tokens, grad_norm=grad_norm
             )
 
             if trained_tokens >= args.max_trained_tokens:
@@ -793,8 +886,8 @@ if __name__ == '__main__':
                 with teacher_attn_manager.temporarily_remove_teacher_attn():
                     try:
                         print(f"Saving checkpoint to {args.output_dir} at epoch {epoch} rank {model_engine.global_rank}")
-                        model_engine.save_checkpoint(args.output_dir, f"checkpoint-epoch{epoch}")
+                        model_engine.save_checkpoint(args.output_dir, f"checkpoint-epoch{epoch}",exclude_frozen_parameters=True)
                     except Exception as e:
                         print(f"Error saving checkpoint: {e}")
-                        import traceback 
+                        import traceback
                         traceback.print_exc()

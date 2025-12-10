@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 import torch.distributed as dist
 from torch.optim import AdamW
-from profiler import time_function
+from .profiler import time_function
 import gc
 import csv
 
