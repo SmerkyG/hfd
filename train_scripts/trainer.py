@@ -5,6 +5,8 @@ import gc
 import torch
 from typing import List, Optional, Union, Dict, Any
 
+from logger import print0 as print
+
 def setup_env():
     # parent_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     # model_path = os.path.join(parent_dir, 'model')
@@ -245,7 +247,7 @@ total_updates = 0
 avg_loss = 0
 def on_train_batch_end(args, batch_idx, model_engine, teacher_engine, loss,
                        teacher_loss, kl_loss, student_cross_entropy_loss,
-                       global_step, epoch, last_log_time, token_per_step,
+                       global_step, epoch, last_log_time, token_per_step, 
                        is_accumulation_step, pbar, trained_tokens, grad_norm=0):
     current_time = time.time()
     elapsed_time = current_time - last_log_time

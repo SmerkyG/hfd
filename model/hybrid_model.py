@@ -26,6 +26,8 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S',
 )
 
+from logger import print0 as print
+
 #global
 current_embeddings = None
 def embedding_hook(module,input,output):

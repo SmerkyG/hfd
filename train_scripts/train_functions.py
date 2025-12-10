@@ -7,6 +7,8 @@ from .profiler import time_function
 import gc
 import csv
 
+from logger import print0 as print
+
 def rank0_print(*args, **kwargs):
     if deepspeed.comm.get_rank() == 0:
         print(*args, **kwargs)

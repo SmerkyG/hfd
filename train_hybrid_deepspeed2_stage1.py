@@ -20,6 +20,8 @@ import wandb
 from tqdm import tqdm
 from train_scripts.profiler import timer
 
+from logger import print0 as print
+
 if __name__ == '__main__':
     from train_scripts.train_functions import configure_optimizer, train_step
 
@@ -602,10 +604,7 @@ if __name__ == '__main__':
             num_total_params = sum(p.numel() for p in model.parameters())
             num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
             for n, p in model.named_parameters():
-                if p.requires_grad:
-                    print(f'param {n} is trainable {p.dtype}')
-                else:
-                    print(f'param {n} is frozen {p.dtype}')
+                print(f'{n} requires_grad = {p.requires_grad}')
             print(f'num_total_params: {num_total_params}, num_trainable_params: {num_trainable_params}, percent: {num_trainable_params / num_total_params * 100:.2f}%')
             #print current gpu memory
             print(f'current gpu memory BEFORE initializing deepspeed: {torch.cuda.memory_summary(device=None, abbreviated=False)}')

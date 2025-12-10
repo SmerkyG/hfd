@@ -19,6 +19,8 @@ import wandb
 from tqdm import tqdm
 from train_scripts.profiler import timer
 
+from logger import print0 as print
+
 if __name__ == '__main__':
     from train_scripts.train_functions import configure_optimizer_stage2, train_step
 
@@ -431,11 +433,11 @@ if __name__ == '__main__':
         print(model)
         # 打印几个关键参数的统计信息
         #print parameter:model.model.layers.27.self_attn.student_attn.ln_x.weight
-        for name, param in model.named_parameters():
-            if name == pname:
-                mean_of_param = param.mean().item()
-                std_of_param = param.std().item()
-                print(f"Parameter {name}: mean={mean_of_param:.6f}, std={std_of_param:.6f}")
+        # for name, param in model.named_parameters():
+        #     if name == pname:
+        #         mean_of_param = param.mean().item()
+        #         std_of_param = param.std().item()
+        #         print(f"Parameter {name}: mean={mean_of_param:.6f}, std={std_of_param:.6f}")
     # 设置模型参数的训练状态
     print('all params are trainable')
     print(f'freeze mlp is {args.freeze_mlp}')
@@ -666,17 +668,6 @@ if __name__ == '__main__':
         print(f'configuring optimizer with args {args}')
 
 
-        for name, m in model.named_parameters():
-            print(f'{name} requires_grad = {m.requires_grad}')
-
-        
-
-
-        # if args.quant_mode != 'none':
-        #     model = remove_original_weights_for_lora_bone(model)
-
-
-
         print("model to CUDA Device")
         model=model.to(device=DeviceID)
         print("done")
@@ -688,9 +679,8 @@ if __name__ == '__main__':
             print(f'optimizer is {optimizer}')
             num_total_params = sum(p.numel() for p in model.parameters())
             num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            # for n, p in model.named_parameters():
-            #     if p.requires_grad:
-            #         print(f'param {n} is trainable')
+            for n, p in model.named_parameters():
+                print(f'{n} requires_grad = {p.requires_grad}')
             print(f'num_total_params: {num_total_params}, num_trainable_params: {num_trainable_params}, percent: {num_trainable_params / num_total_params * 100:.2f}%')
             #print current gpu memory
             print(f'current gpu memory BEFORE initializing deepspeed: {torch.cuda.memory_summary(device=None, abbreviated=False)}')
@@ -711,14 +701,14 @@ if __name__ == '__main__':
         torch.cuda.empty_cache()
         
         # 添加验证代码
-        for name, param in model_engine.module.named_parameters():
-            if name == pname:
-                with deepspeed.zero.GatheredParameters(param):
-                    if args.local_rank == 0:  # 只在 rank 0 打印
-                        print(f"Parameter {name}:")
-                        print(f"  - mean: {param.mean().item():.6f} versus {mean_of_param:.6f}")
-                        print(f"  - std: {param.std().item():.6f} versus {std_of_param:.6f}")
-                    break
+        # for name, param in model_engine.module.named_parameters():
+        #     if name == pname:
+        #         with deepspeed.zero.GatheredParameters(param):
+        #             if args.local_rank == 0:  # 只在 rank 0 打印
+        #                 print(f"Parameter {name}:")
+        #                 print(f"  - mean: {param.mean().item():.6f} versus {mean_of_param:.6f}")
+        #                 print(f"  - std: {param.std().item():.6f} versus {std_of_param:.6f}")
+        #             break
             
             
         # if args.architecture == 'hxa07b':
@@ -866,7 +856,7 @@ if __name__ == '__main__':
             model_engine.step()
 
             # 每一步都调用 on_train_batch_end，但只在累积步骤结束时更新进度条
-            last_log_time, pbar = on_train_batch_end(
+            last_log_time, pbar, trained_tokens = on_train_batch_end(
                 args, batch_idx, model_engine,teacher_engine, loss.item(), teacher_loss, kl_loss, student_cross_entropy_loss,
                 global_step, epoch, last_log_time, token_per_step, is_accumulation_step, pbar, trained_tokens, grad_norm=grad_norm
             )
