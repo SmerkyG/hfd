@@ -195,7 +195,7 @@ def worker_process(local_rank:int, world_size:int, *args, **kwargs):
 class CLI_Config:
     num_gpus:int|None = None
     ctxlen:int = 2048
-    micro_bsz:int = 8
+    micro_bsz:int = 32
     max_iters:int = 1
     dataset_name:str = "robbiegwaldd/dclm-10B"
     model_path:str = 'Qwen/Qwen2-0.5B-Instruct' # FIXME - use 3b or make all this stuff configurable
@@ -204,6 +204,7 @@ class CLI_Config:
     base_config_class_path:str = 'transformers.models.qwen2.configuration_qwen2.Qwen2Config'
     sliding_window_size:int = 256
     layer_hybrid_types:list|None = None
+    seed:int = 1337
 
 
 def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
@@ -228,8 +229,8 @@ def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
     StreamingLLMHybridConfig = my_create_config_class(StreamingLLMHybridConfigParent)
 
     if local_rank == 0: print("loading config", cli_config.model_path)
-    teacher_model_config = AutoConfig.from_pretrained(cli_config.model_path)
-    config_class = type(teacher_model_config)
+    # teacher_model_config = AutoConfig.from_pretrained(cli_config.model_path)
+    # config_class = type(teacher_model_config)
     config_dict, unused_kwargs = PretrainedConfig.get_config_dict(cli_config.model_path, _from_auto=True)
     #config_dict['auto_map'] = {"AutoModelForCausalLM": "greedy_streamingllm.StreamingLLMHybridForCausalLM"}
     #if local_rank == 0: print(config_dict)
@@ -282,7 +283,7 @@ def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
         persistent_workers=False,
         collate_fn=TokenizingCollator(tokenizer, cli_config.ctxlen),
         sampler=sampler,
-        shuffle=False,
+        shuffle=True,
     )
 
     # now that model is created, set which layers use the replacement to start
@@ -296,6 +297,7 @@ def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
         for layer_id in range(local_rank, layer_count, world_size):
             total_loss = torch.zeros([1], device=device)
             total_batchlen = 0
+            torch.manual_seed(cli_config.seed)
             for step, data in enumerate(dataloader):
                 if step >= cli_config.max_iters:
                     break
