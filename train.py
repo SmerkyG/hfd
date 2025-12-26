@@ -200,7 +200,9 @@ if __name__ == '__main__':
         from accelerate import init_empty_weights
         with torch_default_dtype(dtype), init_empty_weights():
             student_model = student_model_class(student_config)
-        student_model.load_state_dict(weights, strict=True, assign=True)
+        assert len(set(student_model.state_dict().keys()) - set(weights.keys())) == 0, "Student model had parameters that were not present in the loaded checkpoint"
+        student_model.load_state_dict(weights, strict=False, assign=True)
+        del weights
     else:
         assert False, f"distillation stage {config.stage} not supported"
 

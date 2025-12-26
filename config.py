@@ -34,34 +34,6 @@ def merge_config(dst:dict, src:dict):
             dst[key] = srcval
     return dst
 
-import ast
-from ast import Constant, UnaryOp, USub
-
-def literal_eval(s:str):
-    def _convert_num(node):
-        if not isinstance(node, Constant) or type(node.value) not in (int, float, complex):
-            raise ValueError()
-        return node.value
-
-    if s == "None":
-        return None
-
-    # if we can convert to a constant, great
-    # if not, treat it as a string
-    try:
-        node = ast.parse(s.lstrip(" \t"), mode='eval')
-        if isinstance(node, ast.Expression):
-            node = node.body
-        multiplier = 1
-        if isinstance(node, UnaryOp) and isinstance(node.op, USub):
-            multiplier = -1
-            node = node.operand
-        return multiplier * _convert_num(node)
-    except:
-        pass
-    s = s.encode('latin-1','backslashreplace').decode('unicode_escape')
-    return s
-
 def parse_args(args:list, out:Config|None = None):
     if len(args) % 2 != 0:
         raise CLIError("bad number of arguments (they must all be pairs)")
@@ -77,10 +49,17 @@ def parse_args(args:list, out:Config|None = None):
             if not hasattr(subobj, part):
                 subobj[part] = Config()
             subobj = subobj[part]
+        # if we can convert to a constant, great
+        # if not, treat it as a string
         try:
-            subobj[parts[-1]] = literal_eval(value)
+            value = value.lstrip(" \t")
+            # FIXME - would be safer if we had a full implementation of literal_eval, but this is just for use from commandline which is a privileged environment anyway
+            subobj[parts[-1]] = eval(value)
         except:
-            raise CLIError(f"could not parse value for '{name}': {value}")
+            try:
+                subobj[parts[-1]] = value.encode('latin-1','backslashreplace').decode('unicode_escape')
+            except:
+                raise CLIError(f"could not parse value for '{name}': {value}")
     return out
 
 import yaml
