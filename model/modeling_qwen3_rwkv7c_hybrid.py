@@ -1,5 +1,5 @@
-from model.rwkv7c_attention import RWKV7cAttention
-from model.wrap_hf import create_model_class, StaticStateCacheLayer
+from .rwkv7c_attention import RWKV7cAttention
+from .wrap_hf import create_model_class, StaticStateCacheLayer
 
 Qwen3RWKV7cHybridForCausalLM = create_model_class(
     replacement_attention_class=RWKV7cAttention, 

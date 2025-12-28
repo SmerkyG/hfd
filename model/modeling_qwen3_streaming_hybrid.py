@@ -1,5 +1,5 @@
-from model.streaming_attention import StreamingAttention
-from model.wrap_hf import create_model_class, StaticStateCacheLayer
+from .streaming_attention import StreamingAttention
+from .wrap_hf import create_model_class, StaticStateCacheLayer
 
 Qwen3StreamingHybridForCausalLM = create_model_class(
     replacement_attention_class=StreamingAttention, 

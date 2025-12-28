@@ -1,4 +1,4 @@
-from model.wrap_hf import create_config_class
+from .wrap_hf import create_config_class
 
 Qwen2StreamingHybridConfigParent = create_config_class(base_configuration_path='transformers.models.qwen2.configuration_qwen2.Qwen2Config', )
 
