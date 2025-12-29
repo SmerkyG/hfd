@@ -96,7 +96,7 @@ class CLI_Config:
     seed:int = 1337
     iterate:int = 1
     test:int = 0
-
+    dtype:str = 'bfloat16'  # model dtype: bfloat16, float16, float32
 
 def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
     # Set device
@@ -127,19 +127,11 @@ def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
     # NOTE - entirely replacement attentions, and we will change the sliding window size as needed to simulate the original model
     model_config.layer_hybrid_types = ['radlads_replacement_attention'] * model_config.num_hidden_layers
 
-    if local_rank == 0: print("instantiating customized model", cli_config.model_path)
-    with init_empty_weights():
-        model = StreamingHybridForCausalLM(model_config)
+    dtype_map = {'bfloat16': torch.bfloat16, 'float16': torch.float16, 'float32': torch.float32}
+    torch_dtype = dtype_map.get(cli_config.dtype, torch.bfloat16)
 
-    if local_rank == 0: print("loading original model weights", cli_config.model_path)
-    base_model = AutoModelForCausalLM.from_pretrained(cli_config.model_path, device_map=device)
-    base_weights = base_model.state_dict()
-    del base_model
-
-    if local_rank == 0: print("moving original model weights", cli_config.model_path)
-    model.load_state_dict(base_weights, assign=True)
-    del base_weights
-
+    if local_rank == 0: print("loading customized model", cli_config.model_path)
+    model = StreamingHybridForCausalLM.from_pretrained(cli_config.model_path, config=model_config, device_map=device, dtype=torch_dtype)
     model.eval()
 
     if cli_config.test:

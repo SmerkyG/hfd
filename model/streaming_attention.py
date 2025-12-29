@@ -42,6 +42,10 @@ class StreamingAttention(nn.Module):
                 k = repeat_kv(k, H // KVH)
                 v = repeat_kv(v, H // KVH)
 
+        if attention_mask is not None and attention_mask.dtype != torch.bool:
+            # Convert to boolean type, making sdpa to force call FlashAttentionScore to improve performance.
+            attention_mask = torch.logical_not(attention_mask.bool()).to(q.device)
+
         sliding_window = self.sliding_window
         if sliding_window is not None and sliding_window > 0:
             q_idx = torch.arange(S-L, S, device=q.device)[None, None, :, None]
