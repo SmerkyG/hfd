@@ -50,32 +50,34 @@ class CompressingLayer(DynamicLayer):
         layer_idx = cache_kwargs['layer_idx']
 
         if self.cumulative_length % compression_chunk_size == 0 and keys.shape[-2] > compression_chunk_size * n_window_chunks:
-            keys_subset = keys[:, :, :-compression_chunk_size * n_window_chunks, :]
-            keys_remaining = keys[:, :, -compression_chunk_size * n_window_chunks:, :]
-            values_remaining = values[:, :, -compression_chunk_size * n_window_chunks:, :]
-            # similarity
-            c = keys_subset @ keys_subset.mT
-            # mask diag so that self similarity of keys is not random based on length, since they're not normalized
-            i = torch.arange(c.shape[-1], device=c.device)
-            c[:, :, i, i] = float('nan')
-            # Compute variance (manual calculation to handle NaN)
-            mean = torch.nanmean(c, dim=-1, keepdim=True)
-            variances = torch.nanmean((c - mean)**2, dim=-1)
-            # Get top-k least similar keys (currently going to a total of cumulative_length ** 0.9 every chunk)
-            num_top_k = int(keys_subset.shape[2] ** 0.9)
-            if layer_idx == 0:
-                print("Compressing ", keys_subset.shape[2], " of ", self.cumulative_length, "to", num_top_k)
-            top_k_indices = torch.topk(variances, num_top_k, dim=-1, largest=False).indices
-            top_k_indices = top_k_indices.view(B, H, num_top_k, 1).expand(-1, -1, -1, D)
-            # use only top-k least similar key indices as retained keys and values
-            keys_subset = torch.gather(keys_subset, 2, top_k_indices)
-            values_subset = torch.gather(values, 2, top_k_indices)
-            keys = torch.cat([keys_subset, keys_remaining], dim=2)
-            values = torch.cat([values_subset, values_remaining], dim=2)
-            # if layer_idx == 0:
-            #     print(f"Shape of top_k_keys: {keys.shape}")
-            self.keys = keys
-            self.values = values
+            num_top_k = 1024 - compression_chunk_size * n_window_chunks
+            if num_top_k < self.cumulative_length - compression_chunk_size * n_window_chunks:
+                keys_subset = keys[:, :, :-compression_chunk_size * n_window_chunks, :]
+                keys_remaining = keys[:, :, -compression_chunk_size * n_window_chunks:, :]
+                values_remaining = values[:, :, -compression_chunk_size * n_window_chunks:, :]
+                # similarity
+                c = keys_subset @ keys_subset.mT
+                # mask diag so that self similarity of keys is not random based on length, since they're not normalized
+                i = torch.arange(c.shape[-1], device=c.device)
+                c[:, :, i, i] = float('nan')
+                # Compute variance (manual calculation to handle NaN)
+                mean = torch.nanmean(c, dim=-1, keepdim=True)
+                variances = torch.nanmean((c - mean)**2, dim=-1)
+                # Get top-k least similar keys (currently going to a total of cumulative_length ** 0.9 every chunk)
+                #num_top_k = int((self.cumulative_length - compression_chunk_size * n_window_chunks) ** 0.9)
+                if layer_idx == 0:
+                    print("Compressing ", keys_subset.shape[2], " of ", self.cumulative_length, "to", num_top_k)
+                top_k_indices = torch.topk(variances, num_top_k, dim=-1, largest=False).indices
+                top_k_indices = top_k_indices.view(B, H, num_top_k, 1).expand(-1, -1, -1, D)
+                # use only top-k least similar key indices as retained keys and values
+                keys_subset = torch.gather(keys_subset, 2, top_k_indices)
+                values_subset = torch.gather(values, 2, top_k_indices)
+                keys = torch.cat([keys_subset, keys_remaining], dim=2)
+                values = torch.cat([values_subset, values_remaining], dim=2)
+                # if layer_idx == 0:
+                #     print(f"Shape of top_k_keys: {keys.shape}")
+                self.keys = keys
+                self.values = values
 
         return keys, values
 
@@ -83,25 +85,26 @@ class CompressingLayer(DynamicLayer):
 import transformers.generation
 from transformers.generation.configuration_utils import GenerationConfig
 class GenerationMixinReplacement(transformers.generation.GenerationMixin):
-    def prepare_inputs_for_generation(
+    @torch.no_grad()
+    def generate(
         self,
-        input_ids: torch.LongTensor,
-        past_key_values: Optional[Cache] = None,
-        attention_mask: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        cache_position: Optional[torch.LongTensor] = None,
+        inputs: torch.Tensor | None = None,
+        generation_config: GenerationConfig | None = None,
         **kwargs,
-    ):
-        # # set up batched prefill
-        self.generation_config.prefill_chunk_size = 256 #compression_chunk_size
-        
-        if not isinstance(past_key_values, CompressingCache):
-           past_key_values = CompressingCache()
+    ): # -> GenerateOutput | torch.LongTensor:
+        # remove idiotic generation config settings from qwen
+        kwargs['max_new_tokens'] = None
+        # set up batched prefill
+        kwargs['prefill_chunk_size'] = 256
 
-        return super().prepare_inputs_for_generation(input_ids, past_key_values, attention_mask, inputs_embeds, cache_position, **kwargs)
+        return super().generate(inputs, generation_config=generation_config, **kwargs)   
 
     # code from 5.0.0rc2 with bugfix for position_ids because 4.57.3 was broken for chunked prefill
     def _prefill(self, input_ids: torch.LongTensor, generation_config: GenerationConfig, model_kwargs):
+        # force use of compressing cache
+        if not isinstance(model_kwargs.get('past_key_values'), CompressingCache):
+           model_kwargs['past_key_values'] = CompressingCache()
+
         if generation_config.prefill_chunk_size is None:
             model_kwargs = self._get_initial_cache_position(input_ids.shape[1], input_ids.device, model_kwargs)
             model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
