@@ -60,7 +60,7 @@ class StreamingAttention(nn.Module):
                 #attention_mask = attention_mask & (sink_mask | window_mask | prefill_mha_mask)
                 attention_mask = attention_mask & (sink_mask | window_mask)
             else:
-                sink_mask = kv_idx == 0
+                sink_mask = kv_idx < self.sink_window
                 attention_mask = kv_idx <= q_idx # causal
                 attention_mask = attention_mask & (sink_mask | window_mask)
 
