@@ -311,8 +311,10 @@ def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
                 # change to student model with a single additional swa layer
                 for layer_id2 in cli_config.swa_layer_ids:
                     model.model.layers[layer_id2].self_attn.attn_replacement.sliding_window = cli_config.sliding_window_size
+                    model.model.layers[layer_id2].self_attn.attn_replacement.sink_window = cli_config.sink_window_size
                 if cli_config.iterate:
                     model.model.layers[layer_id].self_attn.attn_replacement.sliding_window = cli_config.sliding_window_size
+                    model.model.layers[layer_id].self_attn.attn_replacement.sink_window = cli_config.sink_window_size
 
                 # run student model
                 student_logits = model(input_ids).logits
