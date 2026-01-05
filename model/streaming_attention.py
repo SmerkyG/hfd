@@ -11,6 +11,7 @@ class StreamingAttention(nn.Module):
         self.config = config
         self.layer_idx = layer_idx
         self.sliding_window = config.streaming_sliding_window
+        self.sink_window = config.streaming_sink_window
 
     def forward(
         self, 
@@ -54,7 +55,7 @@ class StreamingAttention(nn.Module):
             if attention_mask is not None:
                 assert attention_mask.dtype == torch.bool
                 sink_indices = (S - attention_mask.view(B,L,S)[:,-1,:].sum(dim=-1)).view(B) # sink offset per batch idx
-                sink_mask = kv_idx == sink_indices.view(B,1,1,1)
+                sink_mask = (kv_idx >= sink_indices.view(B,1,1,1)) & (kv_idx < sink_indices.view(B,1,1,1) + self.sink_window)
                 #prefill_mha_mask = q_idx >= S - prefill_n_mha_tokens
                 #attention_mask = attention_mask & (sink_mask | window_mask | prefill_mha_mask)
                 attention_mask = attention_mask & (sink_mask | window_mask)

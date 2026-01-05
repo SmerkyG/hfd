@@ -107,6 +107,7 @@ class CLI_Config:
     base_attention_class_path:str = 'transformers.models.qwen2.modeling_qwen2.Qwen2Attention'
     base_config_class_path:str = 'transformers.models.qwen2.configuration_qwen2.Qwen2Config'
     sliding_window_size:int = 256
+    sink_window_size:int = 1
     swa_layer_ids:list = field(default_factory=list)
     seed:int = 1337
     iterate:int = 1
@@ -139,9 +140,10 @@ def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
 
     StreamingHybridConfigParent = create_config_class(cli_config.base_config_class_path)
     class StreamingHybridConfig(StreamingHybridConfigParent):
-        def __init__(self, streaming_sliding_window:int|None = None, **kwargs):
+        def __init__(self, streaming_sliding_window:int|None = None, streaming_sink_window:int = 1, **kwargs):
             super().__init__(**kwargs)
             self.streaming_sliding_window = streaming_sliding_window
+            self.streaming_sink_window = streaming_sink_window
 
     if local_rank == 0: print("loading config", cli_config.model_path)
     config_dict, unused_kwargs = PretrainedConfig.get_config_dict(cli_config.model_path, _from_auto=True)
@@ -235,6 +237,7 @@ def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
 
             # Enable SWA for this layer only
             model.model.layers[layer_id].self_attn.attn_replacement.sliding_window = cli_config.sliding_window_size
+            model.model.layers[layer_id].self_attn.attn_replacement.sink_window = cli_config.sink_window_size
 
             # Run evaluation
             layer_results = lm_eval.simple_evaluate(
