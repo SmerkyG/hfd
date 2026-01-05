@@ -206,7 +206,7 @@ def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
         # Run baseline only on rank 0 (all layers with sliding_window=0 = full attention)
-        if local_rank == 0:
+        if local_rank == 0 and cli_config.iterate:
             print(f"Running baseline evaluation (all full attention)...")
             for layer_id2 in range(layer_count):
                 model.model.layers[layer_id2].self_attn.attn_replacement.sliding_window = 0
@@ -236,8 +236,9 @@ def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
                 model.model.layers[layer_id2].self_attn.attn_replacement.sliding_window = 0
 
             # Enable SWA for this layer only
-            model.model.layers[layer_id].self_attn.attn_replacement.sliding_window = cli_config.sliding_window_size
-            model.model.layers[layer_id].self_attn.attn_replacement.sink_window = cli_config.sink_window_size
+            if cli_config.iterate:
+                model.model.layers[layer_id].self_attn.attn_replacement.sliding_window = cli_config.sliding_window_size
+                model.model.layers[layer_id].self_attn.attn_replacement.sink_window = cli_config.sink_window_size
 
             # Run evaluation
             layer_results = lm_eval.simple_evaluate(
@@ -253,6 +254,9 @@ def _worker_process(local_rank:int, world_size:int, cli_config:CLI_Config):
             metrics = extract_metrics(layer_results['results'])
             append_to_csv(layer_id, metrics)
             print(f"[GPU {local_rank}] Layer {layer_id}: {metrics}")
+
+            if not cli_config.iterate:
+                break
 
         return
 
