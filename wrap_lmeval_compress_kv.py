@@ -142,18 +142,18 @@ class GenerationMixinReplacement(transformers.generation.GenerationMixin):
                 with torch.enable_grad():
                     predictions = F.scaled_dot_product_attention(q, k, v, is_causal=False)
                     #loss = F.mse_loss(vo, targets)
-                    loss = ((predictions - targets) ** 2).sum()
+                    loss = ((predictions - targets) ** 2).mean()
                     loss.backward()
                 with torch.no_grad():
                     lr = 1.0
                     revised_keys = old_keys - lr * k.grad
                     revised_values = old_values - lr * v.grad
 
-                # keys[:, :, pos+N-M:pos+N, :] = revised_keys
-                # values[:, :, pos+N-M:pos+N, :] = revised_values
+                keys[:, :, pos+N-M:pos+N, :] = revised_keys
+                values[:, :, pos+N-M:pos+N, :] = revised_values
 
-                keys[:, :, pos+N-M:pos+N, :] = old_keys
-                values[:, :, pos+N-M:pos+N, :] = old_values
+                #keys[:, :, pos+N-M:pos+N, :] = old_keys
+                #values[:, :, pos+N-M:pos+N, :] = old_values
             print("Done")
 
             # zero out the attention mask except for in the sink and the top-k kv cache entries we just compacted
