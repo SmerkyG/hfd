@@ -81,7 +81,7 @@ class TrainConfig:
 class ModelConfig:
     model_class_path:str = ''
     config_class_path:str = ''
-    partial_config:dict
+    partial_config:dict = field(default_factory=dict)
     # maybe we can specify a partial HF config in yaml format, and import the dict then merge with the teacher dict and save out the combined result
     # or even store that partial config here?
 
@@ -137,7 +137,7 @@ if __name__ == '__main__':
     device = f'cuda:{config.local_rank}'
 
     # FIXME - get rid of this stuff somehow    
-    os.environ["architecture"] = 'hxa079'
+    #os.environ["architecture"] = 'hxa079'
     # FIXME - this is incorrect when att_dim is larger
     os.environ["RWKV_HEAD"] = str(student_config_dict['num_attention_heads'])
     os.environ["RWKV_HEAD_SIZE_A"] = str(student_config_dict['head_dim'])
@@ -206,7 +206,7 @@ if __name__ == '__main__':
     else:
         assert False, f"distillation stage {config.stage} not supported"
 
-    # # FIXME - this doesn't appear to work properly in HF yet, but neither does our inner checkpointing in the attention replacement
+    # # FIXME - this doesn't appear to work properly in HF yet
     # if config.grad_cp:
     #     student_model.gradient_checkpointing(gradient_checkpointing_kwargs={"use_reentrant": False})
 
@@ -214,12 +214,18 @@ if __name__ == '__main__':
     student_model.requires_grad_(False)
     #student_model.get_input_embeddings().requires_grad_(True) # FIXME - should we unfreeze the embeddings since those don't usually work properly frozen with deepspeed? or is this only in zero_stage3?
     for layer in student_model.model.layers:
+        # in stage 2 we also unfreeze input_layernorm and post_attention_layernorm
+        if config.stage == 2:
+            layer.input_layernorm.requires_grad_(True)
+            layer.post_attention_layernorm.requires_grad_(True)
+
         layer.self_attn.requires_grad_(True)
         if layer.self_attn.teacher_attn is not None:
             layer.self_attn.teacher_attn.requires_grad_(False)
 
-    # for n, p in student_model.named_parameters():
-    #     print(n, p.requires_grad)
+    print("== All params ==")
+    for name, param in student_model.named_parameters():
+        print(f"  {name}: requires_grad={param.requires_grad} {param.dtype} {param.shape}")
     
     tokenizer = AutoTokenizer.from_pretrained(config.teacher_hf)
     if tokenizer.pad_token is None:
@@ -291,28 +297,28 @@ if __name__ == '__main__':
 
     teacher_engine = teacher_model
 
-    @contextmanager
-    def temporarily_remove_teacher_attn(student_model_engine):
-        stored_teacher_attns = {}
+    # @contextmanager
+    # def temporarily_remove_teacher_attn(student_model_engine):
+    #     stored_teacher_attns = {}
 
-        try:
-            for layer_idx, layer in enumerate(student_model_engine.module.model.layers):
-                attention_wrapper = layer.self_attn
-                if hasattr(attention_wrapper, 'teacher_attn'):
-                    stored_teacher_attns[layer_idx] = attention_wrapper.teacher_attn
-                    if hasattr(attention_wrapper, '_modules') and 'teacher_attn' in attention_wrapper._modules:
-                        del attention_wrapper._modules['teacher_attn']
-                    attention_wrapper.teacher_attn = None
+    #     try:
+    #         for layer_idx, layer in enumerate(student_model_engine.module.model.layers):
+    #             attention_wrapper = layer.self_attn
+    #             if hasattr(attention_wrapper, 'teacher_attn'):
+    #                 stored_teacher_attns[layer_idx] = attention_wrapper.teacher_attn
+    #                 if hasattr(attention_wrapper, '_modules') and 'teacher_attn' in attention_wrapper._modules:
+    #                     del attention_wrapper._modules['teacher_attn']
+    #                 attention_wrapper.teacher_attn = None
             
-            yield
+    #         yield
             
-        finally:
-            for layer_idx, stored_attn in stored_teacher_attns.items():
-                attention_wrapper = student_model_engine.module.model.layers[layer_idx].self_attn
-                attention_wrapper.teacher_attn = stored_attn
-                if hasattr(attention_wrapper, 'add_module') and not hasattr(attention_wrapper, 'teacher_attn'):
-                    attention_wrapper.add_module("teacher_attn", stored_attn)
-            stored_teacher_attns.clear()
+    #     finally:
+    #         for layer_idx, stored_attn in stored_teacher_attns.items():
+    #             attention_wrapper = student_model_engine.module.model.layers[layer_idx].self_attn
+    #             attention_wrapper.teacher_attn = stored_attn
+    #             if hasattr(attention_wrapper, 'add_module') and not hasattr(attention_wrapper, 'teacher_attn'):
+    #                 attention_wrapper.add_module("teacher_attn", stored_attn)
+    #         stored_teacher_attns.clear()
 
     config.epoch_steps = len(train_dataloader) // (config.accumulate_grad_batches)
     global_step = 0

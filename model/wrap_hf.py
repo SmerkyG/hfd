@@ -8,11 +8,15 @@ from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 def radlads_replacement_attention(module, query, key, value, attention_mask, **kwargs):
     # forward while removing underscores we added to certain kwargs
-    return module.attn_replacement(query, key, value, attention_mask, **{k.rstrip('_'):v for k,v in kwargs.items()}), None
+    return module.attn_replacement(module, query, key, value, attention_mask, **{k.rstrip('_'):v for k,v in kwargs.items()}), None
+
+RADLADS_REPLACEMENT_ATTENTION = 'radlads_replacement_attention'
+NOPE_SDPA_ATTENTION = 'nope_sdpa_attention'
+FULL_ATTENTION = 'full_attention'
 
 from transformers.modeling_utils import AttentionInterface
-AttentionInterface.register('radlads_replacement_attention', radlads_replacement_attention)
-AttentionInterface.register('nope_sdpa_attention', radlads_replacement_attention)
+AttentionInterface.register(RADLADS_REPLACEMENT_ATTENTION, radlads_replacement_attention)
+AttentionInterface.register(NOPE_SDPA_ATTENTION, radlads_replacement_attention)
 
 @contextmanager
 def replace_class(module, name, replacement):
@@ -37,7 +41,9 @@ def create_model_class(replacement_attention_class, base_model_path, base_attent
     class RADLADSAttentionWrapper(base_model_attention_class):
         def __init__(self, config, layer_idx):
             #print("RADLADSAttentionWrapper.__init__")
-            if config.layer_hybrid_types[layer_idx] != 'full_attention':
+            assert config.layer_hybrid_types[layer_idx] in [RADLADS_REPLACEMENT_ATTENTION, NOPE_SDPA_ATTENTION, FULL_ATTENTION]
+            self.original_config = config # we need this for stage 1 teacher calls
+            if config.layer_hybrid_types[layer_idx] != FULL_ATTENTION:
                 # replace the config for this attention layer specifically, to fix backwards with checkpoint
                 config = copy.deepcopy(config)
                 config._attn_implementation = config.layer_hybrid_types[layer_idx]
@@ -45,8 +51,8 @@ def create_model_class(replacement_attention_class, base_model_path, base_attent
             super().__init__(config, layer_idx)
             self.teacher_attn = None
             
-            if config.layer_hybrid_types[layer_idx] != 'full_attention':
-                if config.layer_hybrid_types[layer_idx] == 'nope_sdpa_attention':
+            if config.layer_hybrid_types[layer_idx] != FULL_ATTENTION:
+                if config.layer_hybrid_types[layer_idx] == NOPE_SDPA_ATTENTION:
                     from .sdpa_attention import SDPAAttention
                     self.attn_replacement = SDPAAttention(config, layer_idx)
                 else:
@@ -56,10 +62,22 @@ def create_model_class(replacement_attention_class, base_model_path, base_attent
                 if getattr(config, 'radlads_distillation_stage', 0) == 1:
                     self.teacher_attn = base_model_attention_class(config, layer_idx)
 
-        def is_original_attention_layer(self):
-            return self.config.layer_hybrid_types[self.layer_idx] == 'full_attention'
-
         def forward(self, hidden_states: torch.Tensor, position_embeddings: tuple[torch.Tensor, torch.Tensor], attention_mask: Optional[torch.Tensor] = None, past_key_values:Optional[Cache] = None, use_cache:bool = False, cache_position: Optional[torch.LongTensor] = None, **kwargs):
+            teacher_position_embeddings = position_embeddings
+
+            # update affected cache layers to use our replacement cache layer class
+            if use_cache and past_key_values is not None and replacement_cache_layer_class is not None:
+                while len(past_key_values.layers) <= self.layer_idx:
+                    past_key_values.layers.append(past_key_values.layer_class_to_replicate())
+                # FIXME - is this good enough support for heterogeneous layers like NoPE with RWKV each having their own style of cache?
+                if self.config.layer_hybrid_types[self.layer_idx] == RADLADS_REPLACEMENT_ATTENTION:
+                    if not isinstance(past_key_values.layers[self.layer_idx], replacement_cache_layer_class):
+                        past_key_values.layers[self.layer_idx] = replacement_cache_layer_class()
+
+            # force position embeddings to be a no-op for NoPE layers
+            if self.config.layer_hybrid_types[self.layer_idx] == NOPE_SDPA_ATTENTION and position_embeddings is not None:
+               position_embeddings = (torch.ones_like(position_embeddings[0]), torch.zeros_like(position_embeddings[1]))
+
             # add second underscored copies so things like hidden_states get passed through to attention function via kwargs
             kwargs = kwargs | dict(
                 hidden_states_=hidden_states,
@@ -68,19 +86,6 @@ def create_model_class(replacement_attention_class, base_model_path, base_attent
                 past_key_values_=past_key_values,
                 cache_position_=cache_position,
             )
-
-            # update affected cache layers to use our replacement cache layer class
-            if use_cache and past_key_values is not None and replacement_cache_layer_class is not None:
-                while len(past_key_values.layers) <= self.layer_idx:
-                    past_key_values.layers.append(past_key_values.layer_class_to_replicate())
-                if not isinstance(past_key_values.layers[self.layer_idx], replacement_cache_layer_class):
-                    past_key_values.layers[self.layer_idx] = replacement_cache_layer_class()
-
-            # force position embeddings to be a no-op for NoPE layers
-            if not self.is_original_attention_layer():
-                if self.config.layer_hybrid_types[self.layer_idx] == 'nope_sdpa_attention' and position_embeddings is not None:
-                    # force position embeddings to be a no-op for NoPE layers
-                    position_embeddings = (torch.ones_like(position_embeddings[0]), torch.zeros_like(position_embeddings[1]))
 
             # FIXME - need to check if we want grad_cp somehow, even tho its not in the HF model config - maybe test HF model flag somewhere?
             # if self.config.grad_cp == 1:
@@ -91,15 +96,22 @@ def create_model_class(replacement_attention_class, base_model_path, base_attent
 
             if self.teacher_attn is not None:
                 # in stage 1 we need to return the post attention hidden states for student and teacher, but use teacher as the actual model output for this layer
+                # temporarily set the attention type (this works fine in forward, just not backward)
+                tmp_attn_implementation = self.config._attn_implementation
+                self.config._attn_implementation = self.original_config._attn_implementation
+
                 self.teacher_attn.eval()
                 with torch.no_grad():
-                    teacher_output = self.teacher_attn.forward(hidden_states=hidden_states, position_embeddings=position_embeddings, attention_mask=attention_mask, past_key_values=past_key_values, use_cache=use_cache, cache_position=cache_position, **kwargs)
+                    teacher_output = self.teacher_attn.forward(hidden_states=hidden_states, position_embeddings=teacher_position_embeddings, attention_mask=attention_mask, past_key_values=past_key_values, use_cache=use_cache, cache_position=cache_position, **kwargs)
                 attention_hidden_states = kwargs.get('attention_hidden_states')
                 if attention_hidden_states is not None:
                     attention_hidden_states += [(
                         student_output[0] if isinstance(student_output, tuple) else student_output, 
                         teacher_output[0] if isinstance(teacher_output, tuple) else teacher_output)]
                 layer_output = teacher_output
+
+                # set the attention type back
+                self.config._attn_implementation = tmp_attn_implementation
             else:
                 teacher_output = None
                 layer_output = student_output
@@ -123,8 +135,7 @@ def create_model_class(replacement_attention_class, base_model_path, base_attent
 from transformers.cache_utils import CacheLayerMixin
 class StaticStateCacheLayer(CacheLayerMixin):
     def lazy_initialization(self):
-        self.keys = None
-        self.values = None
+        self.state = None
         self.is_initialized = True    
 
     def update(
@@ -137,11 +148,36 @@ class StaticStateCacheLayer(CacheLayerMixin):
         if not self.is_initialized:
             self.lazy_initialization()
 
-        old_keys, old_values = self.keys, self.values
-        self.keys = key_states
-        self.values = value_states
-        return old_keys, old_values
+        return key_states, value_states
 
+    # def update_statics(
+    #     self,
+    #     key_states, 
+    #     value_states,
+    #     cache_kwargs: Optional[dict[str, Any]] = None,
+    # ):
+    #     # Lazy initialization
+    #     if not self.is_initialized:
+    #         self.lazy_initialization()
+
+    #     old_keys, old_values = self.keys, self.values
+    #     self.keys = key_states
+    #     self.values = value_states
+    #     return old_keys, old_values
+
+    def get_mask_sizes(self, cache_position: torch.Tensor) -> tuple[int, int]:
+        """Return the length and offset of the cache, used to generate the mask"""
+        return 0, 0
+
+    def get_seq_length(self) -> int:
+        """Returns the sequence length of the cached states."""
+        # FIXME - maybe we should track this but currently we have no way to
+        return 0
+
+    def get_max_cache_shape(self) -> int:
+        """Returns the maximum sequence length of the cache object. StaticStateCacheLayer does not have a maximum length."""
+        return -1
+    
 def create_config_class(base_configuration_path):
     base_config_class, _, _ = class_name_and_module_from_path(base_configuration_path)
 
@@ -150,7 +186,7 @@ def create_config_class(base_configuration_path):
             super().__init__(**kwargs)
             self.radlads_distillation_stage = radlads_distillation_stage
             if layer_hybrid_types is None:
-                layer_hybrid_types = ['radlads_replacement_attention'] * self.num_hidden_layers
+                layer_hybrid_types = [RADLADS_REPLACEMENT_ATTENTION] * self.num_hidden_layers
             self.layer_hybrid_types = layer_hybrid_types
 
     return RADLADSConfig

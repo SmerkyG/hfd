@@ -25,3 +25,5 @@ train:
 
   kl_weight: 1.0
   ce_weight: 0.0
+
+  save_per_batches: 300

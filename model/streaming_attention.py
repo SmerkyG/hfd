@@ -15,6 +15,7 @@ class StreamingAttention(nn.Module):
 
     def forward(
         self, 
+        module,
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,

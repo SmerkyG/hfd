@@ -156,6 +156,7 @@ class RWKV7cAttention(torch.nn.Module):
     @torch.compile
     def forward(
         self, 
+        module,
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
@@ -200,7 +201,8 @@ class RWKV7cAttention(torch.nn.Module):
                 v = v * attention_mask[:, -1, -1, -T:, None, None]
 
         if use_cache and past_key_values is not None:
-            vk_state, shift_state = past_key_values.update(None, None, self.layer_idx)
+            cache_layer = past_key_values.layers[self.layer_idx]
+            vk_state, shift_state = cache_layer.state or (None, None)
         #shift_state = shift_state or torch.zeros_like(x[:, -1:])
 
         z = -kk
@@ -212,7 +214,7 @@ class RWKV7cAttention(torch.nn.Module):
             #shift_state = x[:, -1:]
 
         if use_cache and past_key_values is not None:
-            past_key_values.update(vk_state, shift_state, self.layer_idx)
+            cache_layer.state = vk_state, shift_state
 
         x = x * (N ** -0.5) 
         x = x * g

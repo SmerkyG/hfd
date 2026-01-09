@@ -21,3 +21,5 @@ train:
   n_gpu_per_node: 8
   n_nodes: 1
 
+  save_per_batches: 300
+  
